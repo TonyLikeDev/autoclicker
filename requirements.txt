@@ -1,0 +1,2 @@
+# AutoClicker has no third-party dependencies.
+# Standard library only: tkinter + ctypes.
