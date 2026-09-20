@@ -7,6 +7,7 @@ and ``_pump`` drains it on the Tk thread every 50 ms.
 
 from __future__ import annotations
 
+import itertools
 import json
 import queue
 import threading
@@ -49,6 +50,79 @@ BACKGROUND_HELP = (
 )
 
 
+HOTKEY_FIELDS = (
+    ("hk_toggle", "Start / stop toggle"),
+    ("hk_start", "Start only"),
+    ("hk_stop", "Stop only"),
+    ("hk_panic", "Panic stop (always active)"),
+    ("hk_pick", "Capture cursor position / window"),
+)
+
+# ---- modifier dropdown ----------------------------------------------------
+_MOD_FLAGS = (("Ctrl", winapi.MOD_CONTROL), ("Alt", winapi.MOD_ALT),
+              ("Shift", winapi.MOD_SHIFT), ("Win", winapi.MOD_WIN))
+
+MODIFIER_CHOICES = ["None"]
+MOD_LABEL_TO_MASK = {"None": 0}
+for _n in range(1, len(_MOD_FLAGS) + 1):
+    for _combo in itertools.combinations(_MOD_FLAGS, _n):
+        _label = "+".join(name for name, _ in _combo)
+        _mask = 0
+        for _, _bit in _combo:
+            _mask |= _bit
+        MODIFIER_CHOICES.append(_label)
+        MOD_LABEL_TO_MASK[_label] = _mask
+MOD_MASK_TO_LABEL = {v: k for k, v in MOD_LABEL_TO_MASK.items()}
+
+# ---- key dropdown ---------------------------------------------------------
+NOT_SET = "Not set"
+MOUSE_CHOICES = [winapi.MOUSE_BUTTON_NAMES[i] for i in range(1, 6)]
+
+
+def _key_group(*names):
+    return [n for n in names if n in winapi.VK_NAMES]
+
+
+# Grouped rather than alphabetical, so F2 is not buried between F19 and F20.
+KEY_CHOICES = (
+    [NOT_SET]
+    + MOUSE_CHOICES
+    + _key_group(*("F%d" % i for i in range(1, 25)))
+    + _key_group(*(chr(c) for c in range(ord("A"), ord("Z") + 1)))
+    + _key_group(*(chr(c) for c in range(ord("0"), ord("9") + 1)))
+    + _key_group("Space", "Enter", "Tab", "Backspace", "Esc", "CapsLock",
+                 "Insert", "Delete", "Home", "End", "PageUp", "PageDown",
+                 "Up", "Down", "Left", "Right",
+                 "PrintScreen", "ScrollLock", "Pause", "NumLock", "Apps")
+    + _key_group(*("Num%d" % i for i in range(10)))
+    + _key_group("Num*", "Num+", "Num-", "Num.", "Num/")
+    + _key_group("Shift", "Ctrl", "Alt", "LShift", "RShift", "LCtrl", "RCtrl",
+                 "LAlt", "RAlt", "LWin", "RWin")
+    + _key_group("Semicolon", "Equals", "Comma", "Minus", "Period", "Slash",
+                 "Backtick", "LBracket", "Backslash", "RBracket", "Quote")
+    + _key_group("VolumeMute", "VolumeDown", "VolumeUp",
+                 "MediaNext", "MediaPrev", "MediaStop", "MediaPlay")
+)
+
+_MOUSE_LABEL_TO_CODE = {name: code for code, name in winapi.MOUSE_BUTTON_NAMES.items()}
+
+
+def key_label(kind: str, code: int) -> str:
+    if not code:
+        return NOT_SET
+    if kind == "mouse":
+        return winapi.MOUSE_BUTTON_NAMES.get(code, "Mouse %d" % code)
+    return winapi.key_name(code)
+
+
+def label_to_key(label: str) -> tuple[str, int]:
+    if label in _MOUSE_LABEL_TO_CODE:
+        return "mouse", _MOUSE_LABEL_TO_CODE[label]
+    if label in winapi.VK_NAMES:
+        return "key", winapi.VK_NAMES[label]
+    return "key", 0
+
+
 def _fmt_duration(seconds: float) -> str:
     seconds = max(0.0, seconds)
     hours, rem = divmod(int(seconds), 3600)
@@ -77,6 +151,7 @@ class AutoClickerApp:
         self._closing = False
         self._window_list: list = []
         self._canvases: list = []
+        self._key_combos: dict = {}
 
         self.engine = ClickEngine(self.settings, on_event=self._engine_event)
         self.hotkeys = HotkeyManager(on_error=lambda m: self._post("log", m))
@@ -117,11 +192,20 @@ class AutoClickerApp:
     # Icons
     # ==================================================================
     def _ensure_icons(self) -> None:
+        """Prefer the shipped logo; fall back to plain generated dots."""
+        bundled_idle = cfg.asset("autoclicker.ico")
+        bundled_run = cfg.asset("autoclicker-running.ico")
+        if bundled_idle.exists() and bundled_run.exists():
+            self._icon_idle, self._icon_run = bundled_idle, bundled_run
+        else:
+            try:
+                if not self._icon_idle.exists():
+                    make_icon_file(self._icon_idle, (110, 118, 129))
+                if not self._icon_run.exists():
+                    make_icon_file(self._icon_run, (59, 165, 92))
+            except Exception:
+                pass
         try:
-            if not self._icon_idle.exists():
-                make_icon_file(self._icon_idle, (110, 118, 129))
-            if not self._icon_run.exists():
-                make_icon_file(self._icon_run, (59, 165, 92))
             self.root.iconbitmap(default=str(self._icon_idle))
         except Exception:
             pass
@@ -529,29 +613,41 @@ class AutoClickerApp:
                         command=self._rebind_hotkeys).grid(row=1, column=0, sticky="w", pady=2)
 
         box = self._group(tab, "Bindings")
-        self.hotkey_labels = {}
-        rows = (
-            ("hk_toggle", "Start / stop toggle"),
-            ("hk_start", "Start only"),
-            ("hk_stop", "Stop only"),
-            ("hk_panic", "Panic stop (always active)"),
-            ("hk_pick", "Capture cursor position / window"),
-        )
-        for i, (name, text) in enumerate(rows):
-            ttk.Label(box, text=text).grid(row=i, column=0, sticky="w", pady=3)
-            var = tk.StringVar(value=getattr(self.settings, name).label())
-            self._vars["lbl_" + name] = var
-            ttk.Label(box, textvariable=var, style="Key.TLabel", width=22,
-                      anchor="center").grid(row=i, column=1, padx=8)
-            ttk.Button(box, text="Set", width=6,
-                       command=lambda n=name: self._capture_hotkey(n)).grid(row=i, column=2, padx=2)
-            ttk.Button(box, text="Clear", width=7,
-                       command=lambda n=name: self._clear_hotkey(n)).grid(row=i, column=3, padx=2)
+        ttk.Label(box, text="Modifier", style="Muted.TLabel").grid(row=0, column=1, padx=6)
+        ttk.Label(box, text="Key or mouse button", style="Muted.TLabel").grid(
+            row=0, column=2, padx=6)
 
-        ttk.Label(box, text="Any key or mouse button works, modifiers included. "
-                            "Mouse buttons are captured too - bind X1/X2 if you like.",
-                  style="Muted.TLabel", wraplength=560).grid(
-                      row=len(rows), column=0, columnspan=4, sticky="w", pady=(8, 0))
+        for i, (name, text) in enumerate(HOTKEY_FIELDS, start=1):
+            ttk.Label(box, text=text).grid(row=i, column=0, sticky="w", pady=3)
+
+            mod_var = self._var("mod_" + name, tk.StringVar, "None")
+            mod_combo = ttk.Combobox(box, state="readonly", width=16,
+                                     values=MODIFIER_CHOICES, textvariable=mod_var)
+            mod_combo.grid(row=i, column=1, padx=6)
+            mod_combo.bind("<<ComboboxSelected>>",
+                           lambda _e, n=name: self._on_hotkey_changed(n))
+
+            key_var = self._var("key_" + name, tk.StringVar, NOT_SET)
+            key_combo = ttk.Combobox(box, state="readonly", width=22,
+                                     values=KEY_CHOICES, textvariable=key_var)
+            key_combo.grid(row=i, column=2, padx=6)
+            key_combo.bind("<<ComboboxSelected>>",
+                           lambda _e, n=name: self._on_hotkey_changed(n))
+            self._key_combos[name] = key_combo
+
+            ttk.Button(box, text="Capture", width=9,
+                       command=lambda n=name: self._capture_hotkey(n)).grid(
+                           row=i, column=3, padx=2)
+            ttk.Button(box, text="Clear", width=7,
+                       command=lambda n=name: self._clear_hotkey(n)).grid(
+                           row=i, column=4, padx=2)
+
+        ttk.Label(box, text="Pick a modifier and a key to build a combination such as "
+                            "Shift+F5, or press Capture and then hold the modifiers and "
+                            "tap the key. Mouse buttons can be bound the same way.",
+                  style="Muted.TLabel", wraplength=600, justify="left").grid(
+                      row=len(HOTKEY_FIELDS) + 1, column=0, columnspan=5,
+                      sticky="w", pady=(8, 0))
 
         box = self._group(tab, "Suppression")
         ttk.Checkbutton(box, text="Swallow keyboard hotkeys so other apps do not see them",
@@ -900,8 +996,8 @@ class AutoClickerApp:
             self.order_combo.current(cfg.SEQUENCE_ORDERS.index(s.sequence_order))
             self.move_combo.current(cfg.MOVE_STYLES.index(s.move_style))
             self._vars["key_choice"].set(winapi.key_name(s.key_code))
-            for name in ("hk_toggle", "hk_start", "hk_stop", "hk_panic", "hk_pick"):
-                self._vars["lbl_" + name].set(getattr(s, name).label())
+            for name, _text in HOTKEY_FIELDS:
+                self._show_hotkey(name)
         finally:
             self._syncing = False
         self._refresh_points()
@@ -1186,19 +1282,50 @@ class AutoClickerApp:
     def _hk_panic(self) -> None:
         self._post("panic")
 
+    def _on_hotkey_changed(self, name: str) -> None:
+        """A modifier or key dropdown changed."""
+        mods = MOD_LABEL_TO_MASK.get(self._vars["mod_" + name].get(), 0)
+        kind, code = label_to_key(self._vars["key_" + name].get())
+        hotkey = Hotkey(kind=kind, code=code, mods=mods, enabled=bool(code))
+        setattr(self.settings, name, hotkey)
+        self._rebind_hotkeys()
+        if not code:
+            self.log("%s unbound." % name.replace("hk_", ""))
+            return
+        clash = self.hotkeys.conflicts(hotkey, ignore=name.replace("hk_", ""))
+        self.log("%s bound to %s%s"
+                 % (name.replace("hk_", ""), hotkey.label(),
+                    ("  (also used by %s)" % ", ".join(clash)) if clash else ""))
+
+    def _show_hotkey(self, name: str) -> None:
+        """Settings -> the two dropdowns for one binding."""
+        hotkey = getattr(self.settings, name)
+        self._vars["mod_" + name].set(MOD_MASK_TO_LABEL.get(hotkey.mods, "None"))
+        label = key_label(hotkey.kind, hotkey.code if hotkey.enabled else 0)
+        combo = self._key_combos.get(name)
+        if combo is not None and label not in KEY_CHOICES:
+            # An unrecognised virtual key from an imported profile: keep it
+            # selectable rather than silently dropping the binding.
+            combo.configure(values=list(KEY_CHOICES) + [label])
+        self._vars["key_" + name].set(label)
+
     def _capture_hotkey(self, name: str) -> None:
-        self._vars["lbl_" + name].set("Press any key...")
-        self._vars["status"].set("Press a key or mouse button (Esc cancels)")
+        self._vars["status"].set("Hold any modifiers and press a key or mouse "
+                                 "button (Esc cancels)")
 
         def done(hotkey: Hotkey):
             self._post("captured", (name, hotkey))
 
-        self.hotkeys.capture_next(done, include_mouse=True)
+        def progress(mods: int):
+            self._post("capture_progress", mods)
+
+        self.hotkeys.capture_next(done, include_mouse=True, on_progress=progress)
 
     def _clear_hotkey(self, name: str) -> None:
         setattr(self.settings, name, Hotkey(enabled=False))
-        self._vars["lbl_" + name].set("Not set")
+        self._show_hotkey(name)
         self._rebind_hotkeys()
+        self.log("%s unbound." % name.replace("hk_", ""))
 
     def _capture_action_key(self) -> None:
         self._vars["status"].set("Press the key to send (Esc cancels)")
@@ -1434,20 +1561,20 @@ class AutoClickerApp:
             self.quit()
         elif kind == "log":
             self.log(str(payload))
+        elif kind == "capture_progress":
+            held = winapi.modifier_text(payload)
+            self._vars["status"].set(
+                ("%s+... now press the key (Esc cancels)" % held) if held
+                else "Hold any modifiers and press a key or mouse button (Esc cancels)")
         elif kind == "captured":
             name, hotkey = payload
             self._vars["status"].set("Idle" if not self.engine.running else "Clicking")
             if hotkey.kind == "key" and hotkey.code == winapi.VK_ESCAPE and not hotkey.mods:
-                self._vars["lbl_" + name].set(getattr(self.settings, name).label())
                 self.log("Hotkey capture cancelled.")
                 return
-            clash = self.hotkeys.conflicts(hotkey, ignore=name.replace("hk_", ""))
             setattr(self.settings, name, hotkey)
-            self._vars["lbl_" + name].set(hotkey.label())
-            self._rebind_hotkeys()
-            self.log("Bound %s to %s%s" % (name.replace("hk_", ""), hotkey.label(),
-                                           (" (also used by %s)" % ", ".join(clash))
-                                           if clash else ""))
+            self._show_hotkey(name)
+            self._on_hotkey_changed(name)
         elif kind == "captured_action_key":
             self._vars["status"].set("Idle" if not self.engine.running else "Clicking")
             if payload.kind != "key" or not payload.code:

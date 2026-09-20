@@ -106,17 +106,65 @@ app._remove_points()
 app.root.update()
 check("removed", [p.x for p in app.settings.points] == [300, 200])
 
-print("\n[8] hotkey binding and clearing")
-app.settings.hk_stop = Hotkey("mouse", 5, 0)
-app._vars["lbl_hk_stop"].set(app.settings.hk_stop.label())
-app._rebind_hotkeys()
+print("\n[8] hotkey dropdowns build combinations")
+from autoclicker.gui import MODIFIER_CHOICES, KEY_CHOICES, MOD_LABEL_TO_MASK
+
+check("16 modifier combinations offered", len(MODIFIER_CHOICES) == 16,
+      "%d" % len(MODIFIER_CHOICES))
+check("Shift is offered", "Shift" in MODIFIER_CHOICES)
+check("Ctrl+Shift is offered", "Ctrl+Shift" in MODIFIER_CHOICES)
+check("Ctrl+Alt+Shift+Win is offered", "Ctrl+Alt+Shift+Win" in MODIFIER_CHOICES)
+check("mouse buttons in the key list", "Mouse X2 (forward)" in KEY_CHOICES)
+check("F-keys ordered before F10", KEY_CHOICES.index("F2") < KEY_CHOICES.index("F10"))
+
+# Build Shift+F5 purely by selecting, the way a user would.
+app._vars["mod_hk_toggle"].set("Shift")
+app._vars["key_hk_toggle"].set("F5")
+app._on_hotkey_changed("hk_toggle")
 app.root.update()
-check("mouse X2 bound", app._vars["lbl_hk_stop"].get() == "Mouse X2 (forward)",
-      app._vars["lbl_hk_stop"].get())
+hk = app.settings.hk_toggle
+check("settings hold Shift+F5",
+      hk.kind == "key" and hk.code == winapi.VK_NAMES["F5"]
+      and hk.mods == winapi.MOD_SHIFT, "%s" % hk)
+check("label reads Shift+F5", hk.label() == "Shift+F5", hk.label())
+binding = app.hotkeys._bindings.get("toggle")
+check("registered with the manager", binding is not None
+      and binding.hotkey.mods == winapi.MOD_SHIFT)
+
+# Multi-modifier combination.
+app._vars["mod_hk_start"].set("Ctrl+Alt")
+app._vars["key_hk_start"].set("D")
+app._on_hotkey_changed("hk_start")
+app.root.update()
+check("Ctrl+Alt+D bound", app.settings.hk_start.label() == "Ctrl+Alt+D",
+      app.settings.hk_start.label())
+
+# A mouse button with a modifier.
+app._vars["mod_hk_stop"].set("Ctrl")
+app._vars["key_hk_stop"].set("Mouse X2 (forward)")
+app._on_hotkey_changed("hk_stop")
+app.root.update()
+check("Ctrl+Mouse X2 bound",
+      app.settings.hk_stop.label() == "Ctrl+Mouse X2 (forward)",
+      app.settings.hk_stop.label())
+check("kind is mouse", app.settings.hk_stop.kind == "mouse")
+
+# Round-trip through settings and back into the dropdowns.
+saved = app.settings.copy()
+app._replace_settings(saved)
+app.root.update()
+check("dropdowns restored from settings",
+      app._vars["mod_hk_toggle"].get() == "Shift"
+      and app._vars["key_hk_toggle"].get() == "F5",
+      "%s / %s" % (app._vars["mod_hk_toggle"].get(), app._vars["key_hk_toggle"].get()))
+
 app._clear_hotkey("hk_stop")
 app.root.update()
-check("cleared", app._vars["lbl_hk_stop"].get() == "Not set")
+check("cleared", app._vars["key_hk_stop"].get() == "Not set")
 check("unregistered", "stop" not in app.hotkeys._bindings)
+app._vars["mod_hk_toggle"].set("None")
+app._vars["key_hk_toggle"].set("F5")
+app._on_hotkey_changed("hk_toggle")
 
 print("\n[9] hold mode rebinds press+release")
 app.settings.hk_toggle = Hotkey("key", 0x74, 0)

@@ -1,12 +1,34 @@
+<img src="docs/logo.png" width="96" align="left" hspace="12" vspace="4">
+
 # AutoClicker
 
 A full-featured auto clicker for Windows. Pure Python standard library — no
 `pip install`, no bundled binaries. Input is injected with `SendInput`, hotkeys
 come from real low-level hooks, and there is a proper system tray icon.
 
+<br clear="left">
+
 ![Click tab](docs/click-tab.png)
 
 ## Running it
+
+**As an executable** — build a standalone `AutoClicker.exe` that needs no Python
+installed:
+
+```bash
+python build_exe.py
+```
+
+That produces `dist/AutoClicker.exe` (~11 MB, one file, with the logo as its
+icon). PyInstaller is installed into a local `build/venv`, so nothing is added
+system-wide. `--onedir` builds a folder instead (starts faster), and `--console`
+keeps a console window for debugging.
+
+PyInstaller cannot build from MSYS2/MinGW Python, so the script finds a CPython
+install itself (Microsoft Store, python.org, or the one running it) and tells
+you what to install if there isn't one.
+
+**From source:**
 
 ```bash
 python main.py
@@ -23,6 +45,9 @@ python main.py --profile "Fast clicks"   # start with a saved profile
 python main.py --start                   # begin clicking immediately
 python main.py --minimized               # start hidden in the tray
 ```
+
+The logo is generated from source rather than committed as an opaque blob —
+`python tools/make_icon.py` re-renders `assets/*.ico` at 16 through 256 px.
 
 ## Settings
 
@@ -66,11 +91,19 @@ python main.py --minimized               # start hidden in the tray
 
 ### Hotkeys
 - Separate bindings for **toggle, start, stop, panic stop, and position capture**
-- **Any key or mouse button**, including X1/X2 side buttons, with modifiers
+- **Modifier combinations built from dropdowns** — pick `Shift` and `F5` to get
+  Shift+F5. All 16 combinations of Ctrl / Alt / Shift / Win are offered
+- The key dropdown lists mouse buttons alongside keys, so `Ctrl+Mouse X2` is
+  just as easy to set as `Ctrl+Shift+D`
+- Or press **Capture** and type the combination: holding a modifier no longer
+  ends the capture, so Shift-then-F5 records as Shift+F5, with live
+  "Shift+…" feedback while you hold it
 - **Toggle mode** (press to start, press to stop) or **hold mode** (clicks only
   while held)
 - Optionally swallow the hotkey so the app underneath never sees it
 - Conflict detection warns when two actions share a binding
+
+![Hotkeys tab](docs/hotkeys-tab.png)
 
 ### Target
 - **Normal** — real input, wherever the cursor is
@@ -143,6 +176,7 @@ finish sooner. That is why the default hold is 0 ms.
 
 ```
 main.py                 entry point and command-line arguments
+build_exe.py            PyInstaller build, in an isolated venv
 autoclicker/
     winapi.py           ctypes bindings: SendInput, hooks, DPI, window lookup
     config.py           settings dataclass, validation, JSON, profiles
@@ -150,6 +184,9 @@ autoclicker/
     hotkeys.py          global keyboard + mouse hooks, capture, dispatch
     tray.py             Shell_NotifyIcon tray icon and generated .ico files
     gui.py              tkinter interface
+tools/make_icon.py      renders assets/*.ico from scratch
+assets/                 the generated logo, bundled into the exe
+tests/                  four suites, see below
 ```
 
 Threading: the engine and the hotkey dispatcher never touch widgets. They push
@@ -174,3 +211,8 @@ Four suites, 90+ assertions:
 `test_real.py` and `test_hotkeys.py` inject genuine input — a few clicks onto a
 throwaway window they create themselves, and F13/F14 key presses. Nothing is
 sent to any other application, but don't type while they run.
+
+The engine suite asserts on real elapsed time (for example "mean within 0.5 ms
+of 10 ms"), which is what caught the `Event.wait` problem above. That tightness
+means it can wobble if the machine is busy — if a timing check fails, re-run it
+on an idle system before believing it.

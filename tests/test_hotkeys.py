@@ -118,6 +118,62 @@ if captured:
           "%s" % captured[0].label())
 check("capture disarmed afterwards", not mgr.capturing)
 
+print("\n[8b] capture builds Shift+F13 instead of stopping at Shift")
+captured = []
+mgr.clear()
+mgr.capture_next(lambda hk: captured.append(hk))
+winapi.key_event(winapi.VK_SHIFT, True)   # modifier down: must NOT finish it
+time.sleep(0.15)
+check("still capturing after the modifier", mgr.capturing)
+check("nothing captured yet", captured == [], "%r" % captured)
+tap(VK_F13)
+winapi.key_event(winapi.VK_SHIFT, False)
+time.sleep(0.4)
+check("captured one combination", len(captured) == 1, "%r" % captured)
+if captured:
+    check("captured Shift+F13", captured[0].label() == "Shift+F13",
+          captured[0].label())
+
+print("\n[8c] a Ctrl+Shift combination captures too")
+captured.clear()
+mgr.capture_next(lambda hk: captured.append(hk))
+winapi.key_event(winapi.VK_CONTROL, True)
+winapi.key_event(winapi.VK_SHIFT, True)
+time.sleep(0.1)
+tap(VK_F14)
+winapi.key_event(winapi.VK_SHIFT, False)
+winapi.key_event(winapi.VK_CONTROL, False)
+time.sleep(0.4)
+check("captured Ctrl+Shift+F14",
+      len(captured) == 1 and captured[0].label() == "Ctrl+Shift+F14",
+      captured[0].label() if captured else "nothing")
+
+print("\n[8d] Shift+F13 fires, bare F13 does not")
+events.clear()
+mgr.clear()
+mgr.register("combo", Hotkey("key", VK_F13, winapi.MOD_SHIFT),
+             on_press=lambda: events.append("shift-f13"))
+tap(VK_F13)
+time.sleep(0.25)
+check("bare key ignored", events == [], "%r" % events)
+winapi.key_event(winapi.VK_SHIFT, True)
+time.sleep(0.05)
+tap(VK_F13)
+winapi.key_event(winapi.VK_SHIFT, False)
+time.sleep(0.35)
+check("Shift+key fires", events == ["shift-f13"], "%r" % events)
+
+print("\n[8e] two combinations on the same key stay distinct")
+events.clear()
+mgr.register("ctrl", Hotkey("key", VK_F13, winapi.MOD_CONTROL),
+             on_press=lambda: events.append("ctrl"))
+winapi.key_event(winapi.VK_CONTROL, True)
+time.sleep(0.05)
+tap(VK_F13)
+winapi.key_event(winapi.VK_CONTROL, False)
+time.sleep(0.35)
+check("only the Ctrl binding fired", events == ["ctrl"], "%r" % events)
+
 print("\n[9] pause() stops everything firing")
 events.clear()
 mgr.register("t", Hotkey("key", VK_F13, 0), on_press=lambda: events.append("x"))

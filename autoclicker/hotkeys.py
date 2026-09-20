@@ -22,6 +22,15 @@ from dataclasses import dataclass
 from . import winapi
 from .config import Hotkey
 
+# Virtual keys that only ever act as modifiers. During a capture these must not
+# end the capture -- pressing Shift to build "Shift+F5" would otherwise bind
+# bare Shift the instant it went down.
+MODIFIER_VKS = frozenset({
+    winapi.VK_SHIFT, winapi.VK_CONTROL, winapi.VK_MENU,
+    winapi.VK_LWIN, winapi.VK_RWIN,
+    0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5,
+})
+
 
 @dataclass
 class Binding:
@@ -53,6 +62,7 @@ class HotkeyManager:
         # Set while a capture is in progress; swallows the event and reports it.
         self._capture_cb = None
         self._capture_mouse = True
+        self._capture_progress = None
         self._capture_release: tuple[str, int] | None = None
 
     # ------------------------------------------------------------ lifecycle
@@ -120,13 +130,22 @@ class HotkeyManager:
             ]
 
     # ------------------------------------------------------------ capture
-    def capture_next(self, callback, include_mouse: bool = True) -> None:
-        """Swallow the next key/button press and report it as a Hotkey."""
+    def capture_next(self, callback, include_mouse: bool = True,
+                     on_progress=None) -> None:
+        """Swallow the next key/button press and report it as a Hotkey.
+
+        Bare modifier presses do not finish the capture; they are folded into
+        the combination instead, so holding Shift and then tapping F5 yields
+        Shift+F5. ``on_progress`` is called with the live modifier mask each
+        time a modifier goes down or up, for "Shift+..." style feedback.
+        """
         self._capture_mouse = include_mouse
+        self._capture_progress = on_progress
         self._capture_cb = callback
 
     def cancel_capture(self) -> None:
         self._capture_cb = None
+        self._capture_progress = None
         self._capture_release = None
 
     @property
@@ -183,18 +202,23 @@ class HotkeyManager:
             self._capture_release = None
             return True
 
-        if self._capture_cb is not None and pressed:
+        if self._capture_cb is not None:
+            if kind == "key" and code in MODIFIER_VKS:
+                # Part of the combination, not the end of it. Left unswallowed
+                # so a cancelled capture cannot stick a modifier down.
+                if self._capture_progress:
+                    self._queue.put(("progress", self._capture_progress,
+                                     winapi.current_modifiers()))
+                return False
+            if not pressed:
+                return False
             if kind == "mouse" and not self._capture_mouse:
                 return False
             callback, self._capture_cb = self._capture_cb, None
+            self._capture_progress = None
             self._capture_release = (kind, code)
-            mods = winapi.current_modifiers()
-            if kind == "key" and code in (winapi.VK_SHIFT, winapi.VK_CONTROL,
-                                          winapi.VK_MENU, winapi.VK_LWIN,
-                                          winapi.VK_RWIN, 0xA0, 0xA1, 0xA2,
-                                          0xA3, 0xA4, 0xA5):
-                mods = 0  # binding a bare modifier key; do not fold it into mods
-            self._queue.put(("capture", callback, Hotkey(kind, code, mods)))
+            self._queue.put(("capture", callback,
+                             Hotkey(kind, code, winapi.current_modifiers())))
             return True
 
         if self._paused:
@@ -287,7 +311,7 @@ class HotkeyManager:
                 break
             try:
                 kind, callback, payload = item
-                if kind == "capture":
+                if kind in ("capture", "progress"):
                     callback(payload)
                 else:
                     callback()

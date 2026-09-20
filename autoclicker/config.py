@@ -4,10 +4,23 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 
 APP_NAME = "AutoClicker"
+
+
+def app_root() -> Path:
+    """Where the bundled files live, in source and inside a PyInstaller exe."""
+    if getattr(sys, "frozen", False):
+        # onefile unpacks to _MEIPASS; onedir keeps them beside the exe.
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    return Path(__file__).resolve().parent.parent
+
+
+def asset(name: str) -> Path:
+    return app_root() / "assets" / name
 
 MOUSE_BUTTONS = ["left", "right", "middle", "x1", "x2"]
 BUTTON_LABELS = {
